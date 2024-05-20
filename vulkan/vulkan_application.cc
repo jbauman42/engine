@@ -13,6 +13,29 @@
 
 namespace vulkan {
 
+class InitializationDebugReporter {
+ public:
+  static VkBool32 DebugReportCallback(VkDebugReportFlagsEXT flags,
+                                      VkDebugReportObjectTypeEXT objectType,
+                                      uint64_t object,
+                                      size_t location,
+                                      int32_t messageCode,
+                                      const char* pLayerPrefix,
+                                      const char* pMessage,
+                                      void* pUserData) {
+    auto reporter = static_cast<InitializationDebugReporter*>(pUserData);
+
+    reporter->logs_ += pMessage;
+    reporter->logs_ += "\n";
+    return VK_FALSE;
+  }
+
+  const std::string logs() const { return logs_; }
+
+ private:
+  std::string logs_;
+};
+
 VulkanApplication::VulkanApplication(
     VulkanProcTable& p_vk,  // NOLINT
     const std::string& application_name,
@@ -79,9 +102,19 @@ VulkanApplication::VulkanApplication(
       .apiVersion = api_version_,
   };
 
+  InitializationDebugReporter reporter;
+  const VkDebugReportCallbackCreateInfoEXT debug_report_info = {
+      .sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT,
+      .pNext = nullptr,
+      .flags = VK_DEBUG_REPORT_INFORMATION_BIT_EXT |
+               VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_ERROR_BIT_EXT |
+               VK_DEBUG_REPORT_DEBUG_BIT_EXT,
+      .pfnUserCallback = &InitializationDebugReporter::DebugReportCallback,
+      .pUserData = &reporter};
+
   const VkInstanceCreateInfo create_info = {
       .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-      .pNext = nullptr,
+      .pNext = &debug_report_info,
       .flags = 0,
       .pApplicationInfo = &info,
       .enabledLayerCount = static_cast<uint32_t>(layers.size()),
@@ -96,7 +129,10 @@ VulkanApplication::VulkanApplication(
 
   if (VK_CALL_LOG_ERROR(vk_.CreateInstance(&create_info, nullptr, &instance)) !=
       VK_SUCCESS) {
-    FML_DLOG(INFO) << "Could not create application instance.";
+#if OS_FUCHSIA
+    FM_LOG(ERROR) << "Creating instance failed with error:\n" << reporter.log();
+#endif
+    FML_LOG(INFO) << "Could not create application instance.";
     return;
   }
 
